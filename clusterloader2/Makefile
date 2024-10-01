@@ -1,5 +1,6 @@
 DOCKERFILE = Dockerfile
 IMAGE_REPO ?= localhost:5000
+IMAGE_REPO := $(shell echo $(IMAGE_REPO) | tr '[:upper:]' '[:lower:]')
 IMAGE_TAG ?= latest
 IMAGE_NAME = $(IMAGE_REPO)/clusterloader2:$(IMAGE_TAG)
 
