@@ -1,0 +1,30 @@
+# Goal: Similar to scale test run for long duration
+# setup: duration 2 days - 172800 seconds
+# scale table
+# | # of clients | # of servers | # of policies | # of Nodes |
+# | 2000         | 2000         | 2000          | 100 
+
+# prometheus parameters
+CL2_PROMETHEUS_SCRAPE_CILIUM_AGENT: true
+CL2_PROMETHEUS_SCRAPE_CILIUM_AGENT_INTERVAL: 30s
+CL2_PROMETHEUS_SCRAPE_CILIUM_ENVOY: true
+CL2_PROMETHEUS_TOLERATE_MASTER: true
+CL2_PROMETHEUS_MEMORY_LIMIT_FACTOR: 30.0
+CL2_PROMETHEUS_MEMORY_SCALE_FACTOR: 30.0
+CL2_PROMETHEUS_NODE_SELECTOR: "prometheus: \"true\""
+
+# test parameters
+# No. of clients = CL2_NUMBER_OF_CLIENTS_PER_GROUP * CL2_NUMBER_OF_GROUPS
+# No. of servers = CL2_NUMBER_OF_SERVERS_PER_GROUP * CL2_NUMBER_OF_GROUPS
+# for scale test, we will increase the number of clients and servers to
+# scale the cluster and keep the number of workers per client limted.
+# small scale test - 2000 clients, 2000 servers, 1000 policies
+# large scale test - 20000 clients, 20000 servers, 1000 policies
+CL2_NUMBER_OF_CLIENTS_PER_GROUP: 10
+CL2_NUMBER_OF_SERVERS_PER_GROUP: 10
+CL2_NUMBER_OF_GROUPS: 1000
+CL2_TARGET_PORT: 8080
+CL2_WORKERS_PER_CLIENT: 5
+CL2_DURATION: 86400s # 1 day
+CL2_NETWORK_POLICY_TYPE: cnp
+CL2_SOAK_TEST: true

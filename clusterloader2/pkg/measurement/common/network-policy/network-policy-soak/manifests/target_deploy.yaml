@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    {{ (StructuralData .TargetLabelKey)}}: {{.TargetLabelValue}}
+  name: {{.TargetName}}
+  namespace: {{.TargetNamespace}}
+spec:
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      {{ (StructuralData .TargetLabelKey)}}: {{.TargetLabelValue}}
+  template:
+    metadata:
+      labels:
+        app: target
+    spec:
+      nodeSelector:
+        slo: "true"
+      containers:
+      - image: acnpublic.azurecr.io/sanamsarath/h2playground:0.3
+        name: nginx
+        ports:
+        - containerPort: {{.TargetPort}}
+        resources:
+          requests:
+            cpu: "15m"
+            memory: "30Mi"
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900
+      - key: "slo"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"

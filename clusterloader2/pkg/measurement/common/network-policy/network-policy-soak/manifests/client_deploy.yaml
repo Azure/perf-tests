@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    {{ (StructuralData .ClientLabelKey)}}: {{.ClientLabelValue}}
+  name: {{.UniqueName}}
+  namespace: {{.ClientNamespace}}
+spec:
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      {{ (StructuralData .ClientLabelKey)}}: {{.ClientLabelValue}}
+  template:
+    metadata:
+      labels:
+        {{ (StructuralData .ClientLabelKey)}}: {{.ClientLabelValue}}
+    spec:
+      nodeSelector:
+        node: "client"
+      serviceAccountName: {{.ClientName}}-sa
+      containers:
+      - image: acnpublic.azurecr.io/sanamsarath/netloader:0.7
+        name: netloader
+        args:
+          - "--dest_labelSelector={{.TargetLabelKey}}={{.TargetLabelValue}}"
+          - "--namespace={{.TargetNamespace}}"
+          - "--duration={{.Duration}}"
+          - "--interval=1"
+          - "--workers={{.Workers}}"
+          - "--destPort={{.TargetPort}}"
+          - "--destPath={{.TargetPath}}"
+        resources: 
+          requests: 
+             cpu: "20m"
+             memory: "40Mi"
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900
+      - key: "slo"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+

@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	ciliumClientset "github.com/cilium/cilium/pkg/k8s/client/clientset/versioned"
 	"k8s.io/apimachinery/pkg/api/meta"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -75,6 +76,7 @@ type BaseTestClientConfig struct {
 	MainStopChan  chan os.Signal
 	MetricsServer *http.Server
 	K8sClient     *clientset.Clientset
+	CiliumClient  ciliumClientset.Interface
 }
 
 // HostConfig holds information about the pod specification where the
@@ -108,6 +110,16 @@ func CreateBaseTestClientConfig(stopChan chan os.Signal) (*BaseTestClientConfig,
 		return nil, fmt.Errorf("failed to create k8s client, error: %v", err)
 	}
 
+	k8s_config, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	ciliumClient, err := ciliumClientset.NewForConfig(k8s_config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cilium client, error: %v", err)
+	}
+
 	hostConfig := &HostConfig{}
 	targetConfig := &TargetConfig{}
 
@@ -130,6 +142,7 @@ func CreateBaseTestClientConfig(stopChan chan os.Signal) (*BaseTestClientConfig,
 		TargetConfig: targetConfig,
 		MainStopChan: stopChan,
 		K8sClient:    k8sClient,
+		CiliumClient: ciliumClient,
 	}
 
 	return config, nil
