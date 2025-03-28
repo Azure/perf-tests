@@ -6,6 +6,7 @@ metadata:
     app.kubernetes.io/name: prometheus-operator
     app.kubernetes.io/part-of: kube-prometheus
     app.kubernetes.io/version: 0.46.0
+    k8s-app: prometheus-operator
   name: prometheus-operator
   namespace: monitoring
 spec:

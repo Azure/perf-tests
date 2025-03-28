@@ -3,85 +3,73 @@ apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
   name: {{.Name}}
-  namespace: {{.ClientNamespace}} # since this policy is egress, the namespace is the client namespace
+  namespace: {{.ClientNamespace}}
   labels:
-    type: {{.TypeLabelValue}}
+    {{ (StructuralData .ClientLabelKey)}}: {{.ClientLabelValue}}
 spec:
   endpointSelector:
     matchLabels:
-      type: {{.TypeLabelValue}}
+      {{ (StructuralData .ClientLabelKey)}}: {{.ClientLabelValue}}
   egress:
   - toEndpoints:
     - matchLabels:
-        net-pol-test: {{.TargetLabelValue}}
-{{if .OnlyTargetNamespace}}
-        k8s:io.kubernetes.pod.namespace: {{.TargetNamespace}}
-{{end}}
-{{if .L7Enabled}}
+        {{ (StructuralData .TargetLabelKey)}}: {{.TargetLabelValue}}
+        k8s:io.kubernetes.pod.namespace: {{.TargetNamespace}}  
     toPorts:
-    - ports:
+    - ports: 
       - port: "{{.TargetPort}}"
         protocol: TCP
       rules:
         http:
         - method: GET
-          path: /
-{{end}}
+          path: {{.TargetPath}}
 {{else if .NetworkPolicy_Type "ccnp" }}
 apiVersion: cilium.io/v2
 kind: CiliumClusterwideNetworkPolicy
 metadata:
   name: {{.Name}}
   labels:
-    type: {{.TypeLabelValue}}
+    {{ (StructuralData .ClientLabelKey)}}: {{.ClientLabelValue}}
 spec:
   endpointSelector:
     matchLabels:
-      type: {{.TypeLabelValue}}
+      {{ (StructuralData .ClientLabelKey)}}: {{.ClientLabelValue}}
   egress:
   - toEndpoints:
     - matchLabels:
-        net-pol-test: {{.TargetLabelValue}}
-{{if .OnlyTargetNamespace}}
-        k8s:io.kubernetes.pod.namespace: {{.TargetNamespace}}
-{{end}}
-{{if .L7Enabled}}
+        {{ (StructuralData .TargetLabelKey)}}: {{.TargetLabelValue}}
+        k8s:io.kubernetes.pod.namespace: {{.TargetNamespace}}  
     toPorts:
-    - ports:
+    - ports: 
       - port: "{{.TargetPort}}"
         protocol: TCP
       rules:
         http:
         - method: GET
-          path: /
-{{end}}
+          path: {{.TargetPath}}
 {{else}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: {{.Name}}
-  namespace: {{.Namespace}}
+  namespace: {{.ClientNamespace}}
   labels:
-    type: {{.TypeLabelValue}}
+    {{ (StructuralData .ClientLabelKey)}}: {{.ClientLabelValue}}
 spec:
   podSelector:
     matchLabels:
-      type: {{.TypeLabelValue}}
+      {{ (StructuralData .ClientLabelKey)}}: {{.ClientLabelValue}}
   policyTypes:
   - Egress
   egress:
   - to:
     - podSelector:
         matchLabels:
-          net-pol-test: {{.TargetLabelValue}}
-{{if .OnlyTargetNamespace}}
+          {{ (StructuralData .TargetLabelKey)}}: {{.TargetLabelValue}}
       namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: {{.TargetNamespace}}
-{{else}}
-      namespaceSelector: {}
     ports:
-    - port: "{{.TargetPort}}"
-      protocol: TCP
-{{end}}
+      port: "{{.TargetPort}}"
+      protocol: TCP  
 {{end}}
