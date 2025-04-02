@@ -1,0 +1,26 @@
+# Goal: test Envoy and Cilium agent limits by overloading.
+# setup: deploy all the client (load generator) pods on one node and spread the server pods
+# equal number of clients and servers but more workers per client to generate more load
+
+# prometheus parameters
+CL2_PROMETHEUS_SCRAPE_CILIUM_AGENT: true
+CL2_PROMETHEUS_SCRAPE_CILIUM_AGENT_INTERVAL: 30s
+CL2_PROMETHEUS_SCRAPE_CILIUM_ENVOY: true
+CL2_PROMETHEUS_TOLERATE_MASTER: true
+CL2_PROMETHEUS_MEMORY_LIMIT_FACTOR: 30.0
+CL2_PROMETHEUS_MEMORY_SCALE_FACTOR: 30.0
+CL2_PROMETHEUS_NODE_SELECTOR: "prometheus: \"true\""
+
+# test parameters
+# No. of clients = CL2_NUMBER_OF_CLIENTS_PER_GROUP * CL2_NUMBER_OF_GROUPS
+# No. of servers = CL2_NUMBER_OF_SERVERS_PER_GROUP * CL2_NUMBER_OF_GROUPS
+# for stress test, we will try to keep # of clients and # of servers limited
+# but increase the number of workers per client to generate more load.
+# 50 workers per client * 20 clients = 1000rps.
+CL2_NUMBER_OF_CLIENTS_PER_GROUP: 1
+CL2_NUMBER_OF_SERVERS_PER_GROUP: 2
+CL2_NUMBER_OF_GROUPS: 20
+CL2_TARGET_PORT: 8080
+CL2_WORKERS_PER_CLIENT: 50
+CL2_DURATION: 10800s # 3 hours
+CL2_NETWORK_POLICY_TYPE: cnp

@@ -1,0 +1,219 @@
+{{$NUMBER_OF_SERVERS_PER_Group := DefaultParam .CL2_NUMBER_OF_SERVERS_PER_GROUP 2}}
+{{$NUMBER_OF_CLIENTS_PER_Group := DefaultParam .CL2_NUMBER_OF_CLIENTS_PER_GROUP 1}}
+{{$NUMBER_OF_GROUPS := DefaultParam .CL2_NUMBER_OF_GROUPS 2}}
+{{$TARGET_PORT := DefaultParam .CL2_TARGET_PORT 80}}
+{{$WORKERS_PER_CLIENT := DefaultParam .CL2_WORKERS_PER_CLIENT 5}}
+{{$DURATION := DefaultParam .CL2_DURATION 600}}
+{{$Network_Policy_Type := DefaultParam .CL2_NETWORK_POLICY_TYPE "k8s"}}
+{{$SOAK_TEST := DefaultParam .CL2_SOAK_TEST false}}
+namespace:
+  number: {{$NUMBER_OF_GROUPS}}
+  prefix: slo
+  deleteStaleNamespaces: true
+  deleteAutomanagedNamespaces: true
+  enableExistingNamespaces: false
+steps:
+# 1. start cilium agent metrics
+# 2. start cilium envoy metrics
+# 3. start resource usage metrics (cpu, memory usage of Envoy) 
+# 4. start network performance measurement (setup and run)
+# 5. gather network performance measurement (wait and gather results)
+# 6. gather resource usage metrics
+# 7. gather cilium envoy metrics
+# 8. gather cilium agent metrics
+
+# 1. start cilium agent metrics
+- name: Cilium Agent Metrics
+  measurements:
+  - Identifier: CiliumAgentAverageCPUUsage
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: cilium_average_cpu_usage
+      metricVersion: v1
+      unit: cpu
+      queries:
+      - name: Perc99
+        query: quantile(0.99, avg_over_time(rate(cilium_process_cpu_seconds_total[1m])[%v:]))
+      - name: Perc90
+        query: quantile(0.90, avg_over_time(rate(cilium_process_cpu_seconds_total[1m])[%v:]))
+      - name: Perc50
+        query: quantile(0.50, avg_over_time(rate(cilium_process_cpu_seconds_total[1m])[%v:]))
+  - Identifier: CiliumAgentAvgMemUsage
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: cilium_avg_memory_usage
+      metricVersion: v1
+      unit: MB
+      queries:
+      - name: Perc99
+        query: quantile(0.99, avg_over_time(cilium_process_resident_memory_bytes[%v:]) / 1024 / 1024)
+      - name: Perc90
+        query: quantile(0.90, avg_over_time(cilium_process_resident_memory_bytes[%v:]) / 1024 / 1024)
+      - name: Perc50
+        query: quantile(0.5, avg_over_time(cilium_process_resident_memory_bytes[%v:]) / 1024 / 1024)
+  - Identifier: CiliumAgentMaxCPUUsage
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: cilium_max_cpu_usage
+      metricVersion: v1
+      unit: cpu
+      enableViolations: true
+      queries:
+      - name: Perc99
+        query: quantile(0.99, max_over_time(rate(cilium_process_cpu_seconds_total[1m])[%v:]))
+      - name: Perc90
+        query: quantile(0.90, max_over_time(rate(cilium_process_cpu_seconds_total[1m])[%v:]))
+      - name: Perc50
+        query: quantile(0.50, max_over_time(rate(cilium_process_cpu_seconds_total[1m])[%v:]))      
+  - Identifier: CiliumAgentMaxMemUsage
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: cilium_max_memory_usage
+      metricVersion: v1
+      unit: MB
+      enableViolations: true
+      queries:
+      - name: Perc99
+        query: quantile(0.99, max_over_time(cilium_process_resident_memory_bytes[%v:]) / 1024 / 1024)
+      - name: Perc90
+        query: quantile(0.90, max_over_time(cilium_process_resident_memory_bytes[%v:]) / 1024 / 1024)
+      - name: Perc50
+        query: quantile(0.5, max_over_time(cilium_process_resident_memory_bytes[%v:]) / 1024 / 1024)
+  - Identifier: CiliumAgentL7Policy
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: cilium_l7_policy 
+      metricVersion: v1
+      unit: count
+      queries:
+      - name: cilium_l7_received
+        query: sum(increase(cilium_policy_l7_total{proxy_type="envoy", rule="received"}[%v:]))
+      - name: cilium_l7_forwarded
+        query: sum(increase(cilium_policy_l7_total{proxy_type="envoy", rule="forwarded"}[%v:]))
+      - name: cilium_l7_failed
+        query: sum(increase(cilium_policy_l7_total{proxy_type="envoy", rule!~"received|forwarded"}[%v:]))  
+# 2. start cilium envoy metrics
+- name: Starting cilium envoy metrics for http load test
+  measurements:
+  - Identifier: HTTPPerfCiliumEnvoyMetrics
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: "cilium_envoy_http_metrics"
+      metricVersion: v1
+      unit: s
+      queries:
+        - name: envoy_http_requests_total
+          query: sum(increase(envoy_http_rq_total{envoy_http_conn_manager_prefix="proxy"}[%v:]))
+        - name: envoy_http_requests_rate
+          query: avg(rate(envoy_http_rq_total{envoy_http_conn_manager_prefix="proxy"}[%v:]) unless rate(envoy_http_rq_total{envoy_http_conn_manager_prefix="proxy"}[%v:]) == 0)
+        - name: envoy_downstream_connections_total
+          query: sum(increase(envoy_listener_downstream_cx_total{envoy_listener_address!~"^(0\\.0\\.0\\.0_9964|127\\.0\\.0\\.1_9878)$"}[%v:]))
+        - name: envoy_downstream_connections_rate
+          query: avg(rate(envoy_listener_downstream_cx_total{envoy_listener_address!~"^(0\\.0\\.0\\.0_9964|127\\.0\\.0\\.1_9878)$"}[%v:]) unless rate(envoy_listener_downstream_cx_total{envoy_listener_address!~"^(0\\.0\\.0\\.0_9964|127\\.0\\.0\\.1_9878)$"}[%v:]) == 0)
+        - name: envoy_upstream_connections_total
+          query: sum(increase(envoy_cluster_upstream_cx_total{envoy_cluster_name="egress-cluster"}[%v:]))
+        - name: envoy_upstream_connections_rate
+          query: avg(rate(envoy_cluster_upstream_cx_total{envoy_cluster_name="egress-cluster"}[%v:]) unless rate(envoy_cluster_upstream_cx_total{envoy_cluster_name="egress-cluster"}[%v:]) == 0)
+        - name: envoy_memory_allocated_max
+          query: max(max_over_time(envoy_server_memory_allocated[%v:])) / 1024 / 1024
+        - name: envoy_memory_heap_size_max
+          query: max(max_over_time(envoy_server_memory_heap_size[%v:])) / 1024 / 1024
+# 4. start network performance measurement (setup and run)
+- name: Network Policy Soak Test - Start
+  measurements:
+  - Identifier: NetworkPolicySoakMeasurement
+    Method: NetworkPolicySoakMeasurement
+    Params:
+      action: start
+      targetLabelKey: app
+      targetLabelValue: target
+      clientLabelKey: app
+      clientLabelValue: client
+      targetReplicasPerNs: {{$NUMBER_OF_SERVERS_PER_Group}}
+      clientReplicasPerDep: {{$NUMBER_OF_CLIENTS_PER_Group}}
+      targetPort: {{$TARGET_PORT}}
+      targetPath: /
+      testDuration: "{{$DURATION}}"
+      workerPerClient: {{$WORKERS_PER_CLIENT}}
+      npType: {{$Network_Policy_Type}}
+# 5. gather network performance measurement (wait and gather results)
+- name: Network Policy Soak Test - Gather Results
+  measurements:
+  - Identifier: NetworkPolicySoakMeasurement
+    Method: NetworkPolicySoakMeasurement
+    Params:
+      action: gather #gather will wait for the soak test to finish
+# 7. gather cilium envoy metrics
+- name: "gathering cilium envoy metrics for http load test"
+  measurements:
+  - Identifier: HTTPPerfCiliumEnvoyMetrics
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      enableViolations: true
+# 8. gather cilium agent metrics
+- name: Cilium Metrics
+  measurements:
+    - Identifier: CiliumAgentAverageCPUUsage
+      Method: GenericPrometheusQuery
+      Params:
+        action: gather
+        enableViolations: true
+    - Identifier: CiliumAgentAvgMemUsage
+      Method: GenericPrometheusQuery
+      Params:
+        action: gather
+        enableViolations: true
+    - Identifier: CiliumAgentMaxCPUUsage
+      Method: GenericPrometheusQuery
+      Params:
+        action: gather
+        enableViolations: true
+    - Identifier: CiliumAgentMaxMemUsage
+      Method: GenericPrometheusQuery
+      Params:
+        action: gather
+        enableViolations: true
+    - Identifier: CiliumAgentL7Policy
+      Method: GenericPrometheusQuery
+      Params:
+        action: gather
+        enableViolations: true
+# IF SOAK_TEST, GATHER ENVOY MEMORY METRICS 1 HOUR AFTER THE TEST
+# TO VERIFY MEMORY LEAKS
+{{if $SOAK_TEST }}
+- name: Starting Soak metrics collection
+  measurements:
+  - Identifier: SoakPerfCiliumEnvoyMetrics
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: "cilium_envoy_soak_metrics"
+      metricVersion: v1
+      unit: s
+      queries:
+        - name: envoy_memory_allocated_max
+          query: max(max_over_time(envoy_server_memory_allocated[3600s:])) / 1024 / 1024
+        - name: envoy_memory_heap_size_max
+          query: max(max_over_time(envoy_server_memory_heap_size[3600s:])) / 1024 / 1024
+# sleep for 1 hour (3600s)
+- name: Sleep
+  measurements:
+  - Identifier: Sleep
+    Method: Sleep
+    Params:
+      duration: "3600s"
+- name: Soak Envoy Memory Metrics
+  measurements:
+  - Identifier: SoakPerfCiliumEnvoyMetrics
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      enableViolations: true
+{{end}}    

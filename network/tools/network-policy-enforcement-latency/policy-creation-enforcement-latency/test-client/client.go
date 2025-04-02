@@ -39,15 +39,26 @@ type TestClient struct {
 	// The name of the egress policy that allows traffic from test client pods to
 	// target pods.
 	allowPolicyName string
+
+	// network policy namespace if not clusterwide
+	npNamespace string
+
 	// Used to cache policy creation time instead of getting it from API server on
 	// every successful request.
 	policyCreatedTime *utils.TimeWithLock
+
+	// network policy type
+	np_type string
 }
 
 // NewTestClient creates a new test client based on the command flags.
 func NewTestClient(stopChan chan os.Signal) (*TestClient, error) {
 	var allowPolicyName string
+	var np_namespace string
+	var np_type string
 	flag.StringVar(&allowPolicyName, "AllowPolicyName", "", "The name of the egress policy that allows traffic from test client pods to target pods")
+	flag.StringVar(&np_type, "np_type", "k8s", "The type of network policy to be created k8s, cilium etc., (k8s, cnp, ccnp)")
+	flag.StringVar(&np_namespace, "np_namespace", "", "The namespace of the network policy")
 	baseTestClientConfig, err := utils.CreateBaseTestClientConfig(stopChan)
 	if err != nil {
 		return nil, err
@@ -56,11 +67,18 @@ func NewTestClient(stopChan chan os.Signal) (*TestClient, error) {
 	testClient := &TestClient{
 		BaseTestClientConfig: baseTestClientConfig,
 		allowPolicyName:      allowPolicyName,
+		np_type:              np_type,
+		npNamespace:          np_namespace,
 	}
 
 	err = testClient.initialize()
 	if err != nil {
 		return nil, err
+	}
+
+	// if np_type is cnp(cilium network policy) then np namespace should be provided
+	if testClient.np_type == "cnp" && testClient.npNamespace == "" {
+		return nil, fmt.Errorf("cilium network policy namespace is not provided")
 	}
 
 	return testClient, nil
@@ -162,13 +180,36 @@ func (c *TestClient) reportReachedTimeForPolicyCreation(target *utils.TargetSpec
 	c.policyCreatedTime.Lock.Lock()
 
 	if c.policyCreatedTime.Time == nil {
-		networkPolicy, err := c.K8sClient.NetworkingV1().NetworkPolicies(c.HostConfig.HostNamespace).Get(context.TODO(), c.allowPolicyName, metav1.GetOptions{})
-		if err != nil {
-			klog.Warningf("Failed to get network policies for pod %q in namespace %q with IP %q: %v", target.Name, c.HostConfig.HostNamespace, target.IP, err)
-			failed = true
-		} else {
-			policyCreateTime = networkPolicy.GetCreationTimestamp().Time
-			c.policyCreatedTime.Time = &policyCreateTime
+		switch c.np_type {
+		case "k8s":
+			networkPolicy, err := c.K8sClient.NetworkingV1().NetworkPolicies(c.HostConfig.HostNamespace).Get(context.TODO(), c.allowPolicyName, metav1.GetOptions{})
+			if err != nil {
+				klog.Warningf("Failed to get network policies for pod %q in namespace %q with IP %q: %v", target.Name, c.HostConfig.HostNamespace, target.IP, err)
+				failed = true
+			} else {
+				policyCreateTime = networkPolicy.GetCreationTimestamp().Time
+				c.policyCreatedTime.Time = &policyCreateTime
+			}
+		case "ccnp":
+			netPolicy, err := c.CiliumClient.CiliumV2().CiliumClusterwideNetworkPolicies().Get(context.TODO(), c.allowPolicyName, metav1.GetOptions{})
+			if err != nil {
+				klog.Warningf("Failed to get cilium clusterwide network policies for pod %q in namespace %q with IP %q: %v", target.Name, c.HostConfig.HostNamespace, target.IP, err)
+				failed = true
+			} else {
+				policyCreateTime = netPolicy.GetCreationTimestamp().Time
+				c.policyCreatedTime.Time = &policyCreateTime
+			}
+		case "cnp":
+			netPolicy, err := c.CiliumClient.CiliumV2().CiliumNetworkPolicies(c.npNamespace).Get(context.TODO(), c.allowPolicyName, metav1.GetOptions{})
+			if err != nil {
+				klog.Warningf("Failed to get cilium network policies for pod %q in namespace %q with IP %q: %v", target.Name, c.HostConfig.HostNamespace, target.IP, err)
+				failed = true
+			} else {
+				policyCreateTime = netPolicy.GetCreationTimestamp().Time
+				c.policyCreatedTime.Time = &policyCreateTime
+			}
+		default:
+			klog.Warningf("Invalid network policy type %q", c.np_type)
 		}
 	} else {
 		policyCreateTime = *c.policyCreatedTime.Time

@@ -1,4 +1,4 @@
-REGISTRY ?= gcr.io/k8s-staging-perf-tests/network-policy-enforcement-latency
+REGISTRY ?= docker.io/sanamsarath
 
 POD_CREATION_IMAGE_NAME ?= pod-creation-reachability-latency
 POD_CREATION_PATH ?= $(POD_CREATION_IMAGE_NAME)

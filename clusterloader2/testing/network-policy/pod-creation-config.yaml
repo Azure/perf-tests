@@ -1,0 +1,240 @@
+{{$NETWORK_POLICY_ENFORCEMENT_LATENCY_BASELINE := DefaultParam .CL2_NETWORK_POLICY_ENFORCEMENT_LATENCY_BASELINE false}}
+{{$NET_POLICY_ENFORCEMENT_LATENCY_TARGET_LABEL_KEY := DefaultParam .CL2_NET_POLICY_ENFORCEMENT_LATENCY_TARGET_LABEL_KEY "net-pol-test"}}
+{{$NET_POLICY_ENFORCEMENT_LATENCY_TARGET_LABEL_VALUE := DefaultParam .CL2_NET_POLICY_ENFORCEMENT_LATENCY_TARGET_LABEL_VALUE "enforcement-latency"}}
+{{$NET_POLICY_ENFORCEMENT_LATENCY_NODE_LABEL_KEY := DefaultParam .CL2_NET_POLICY_ENFORCEMENT_LATENCY_NODE_LABEL_KEY "test"}}
+{{$NET_POLICY_ENFORCEMENT_LATENCY_NODE_LABEL_VALUE := DefaultParam .CL2_NET_POLICY_ENFORCEMENT_LATENCY_NODE_LABEL_VALUE "net-policy-client"}}
+{{$NET_POLICY_ENFORCEMENT_LATENCY_MAX_TARGET_PODS_PER_NS := DefaultParam .CL2_NET_POLICY_ENFORCEMENT_LATENCY_MAX_TARGET_PODS_PER_NS 5}}
+{{$NET_POLICY_ENFORCEMENT_LOAD_COUNT := DefaultParam .CL2_NET_POLICY_ENFORCEMENT_LOAD_COUNT 1000}}
+{{$NET_POLICY_ENFORCEMENT_LOAD_QPS := DefaultParam .CL2_NET_POLICY_ENFORCEMENT_LOAD_QPS 10}}
+{{$NET_POLICY_ENFORCEMENT_LOAD_TARGET_NAME := DefaultParam .CL2_POLICY_ENFORCEMENT_LOAD_TARGET_NAME "small-deployment"}}
+{{$NET_POLICY_TYPE := DefaultParam .CL2_NET_POLICY_TYPE "k8s"}}
+{{$NET_POLICY_L7_ENABLED := DefaultParam .CL2_NET_POLICY_L7_ENABLED false}}
+{{$CILIUM_POLICY_IMPORTS_ERROR_THRESHOLD := DefaultParam .CL2_CILIUM_POLICY_IMPORTS_ERROR_THRESHOLD 0}}
+{{$CILIUM_ENDPOINT_REGEN_FAIL_PERC_THRESHOLD := DefaultParam .CL2_CILIUM_ENDPOINT_REGEN_FAIL_PERC_THRESHOLD 0.01}}
+{{$NUMBER_OF_SERVERS := DefaultParam .CL2_NUMBER_OF_SERVERS 5}}
+{{$TARGET_GROUP := DefaultParam .CL2_TARGET_GROUP "service-discovery"}}
+{{$TARGET_NAMESPACE_COUNT := DefaultParam .CL2_TARGET_NAMESPACE_COUNT 1}}
+
+name: network_policy_performance 
+namespace:
+  number: {{$TARGET_NAMESPACE_COUNT}}
+  prefix: slo
+  deleteStaleNamespaces: true
+  deleteAutomanagedNamespaces: true
+  enableExistingNamespaces: false
+tuningSets:
+- name: Uniform1qps
+  qpsLoad:
+    qps: 1
+steps:
+# 1. start cilium agent metrics for pod creation latency
+# 2. start cilium envoy metrics for pod creation latency
+# 3. start pod creation network policy enforcement latency metrics
+# 4. setup network pod creation policy enforcement latency measurement
+# 4. run pod creation policy enforcement latency measurement test-type
+# 5. start target deployments for pod creation policy enforcement latency measurement
+# 6. Wait for target deployments to be ready
+# 7. Sleep for 60s (buffer for client pods to measure policy enforcement latency for new target deployments)
+# 8. Gather cilium agent metrics for pod creation latency
+# 9. Gather cilium envoy metrics for pod creation latency
+# 10. Gather pod creation network policy enforcement latency metrics
+# 11. Complete pod creation network policy enforcement latency measurement
+
+# 1. start cilium agent metrics for pod creation - policy enforcement latency
+- name: "starting cilium agent metrics during pod creation - policy enforcement latency measurement"
+  measurements:
+  - Identifier: PodCreationLatencyMetricsCilium
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: "Cilium Agent Pod Creation Policy Enforcement Latency"
+      metricVersion: v1
+      unit: s
+      queries:
+        # Cilium agent metrics that are related to network policies.
+        - name: Number of times a policy import has failed
+          query: sum(cilium_policy_import_errors_total)
+          threshold: {{$CILIUM_POLICY_IMPORTS_ERROR_THRESHOLD}}
+        - name: Failed endpoint regenerations percentage
+          query: sum(cilium_endpoint_regenerations_total{outcome="fail"}) / sum(cilium_endpoint_regenerations_total) * 100
+          threshold: {{$CILIUM_ENDPOINT_REGEN_FAIL_PERC_THRESHOLD}}
+        - name: Policy regeneration time - Perc50
+          query: histogram_quantile(0.50, sum(cilium_policy_regeneration_time_stats_seconds_bucket{scope="total"}) by (le))
+        - name: Policy regeneration time - Perc99
+          query: histogram_quantile(0.99, sum(cilium_policy_regeneration_time_stats_seconds_bucket{scope="total"}) by (le))
+        - name: Time between a policy change and it being fully deployed into the datapath - Perc50
+          query: histogram_quantile(0.50, sum(cilium_policy_implementation_delay_bucket) by (le))
+        - name: Time between a policy change and it being fully deployed into the datapath - Perc99
+          query: histogram_quantile(0.99, sum(cilium_policy_implementation_delay_bucket) by (le))
+        - name: Latency of policy update trigger - Perc50
+          query: histogram_quantile(0.50, sum(cilium_triggers_policy_update_call_duration_seconds_bucket{type="latency"}) by (le))
+        - name: Latency of policy update trigger - Perc99
+          query: histogram_quantile(0.99, sum(cilium_triggers_policy_update_call_duration_seconds_bucket{type="latency"}) by (le))
+        - name: Duration of policy update trigger - Perc50
+          query: histogram_quantile(0.50, sum(cilium_triggers_policy_update_call_duration_seconds_bucket{type="duration"}) by (le))
+        - name: Duration of policy update trigger - Perc99
+          query: histogram_quantile(0.99, sum(cilium_triggers_policy_update_call_duration_seconds_bucket{type="duration"}) by (le))
+        - name: Endpoint regeneration latency - Perc50
+          query: histogram_quantile(0.50, sum(cilium_endpoint_regeneration_time_stats_seconds_bucket{scope="total"}) by (le))
+        - name: Number of policies currently loaded
+          query: avg(cilium_policy)
+        - name: Number of endpoints labeled by policy enforcement status
+          query: sum(cilium_policy_endpoint_enforcement_status)
+# 2. start cilium envoy metrics during pod creation - policy enforcement latency measurement
+- name: "starting cilium envoy metrics for pod creation - policy enforcement latency measurement"
+  measurements:
+  - Identifier: PodCreationLatencyMetricsCiliumEnvoy
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: "Ciliu Envoy Pod Creation Policy Enforcement Latency"
+      metricVersion: v1
+      unit: s
+      queries:
+        - name: Envoy http requests - TargetCount
+          query: sum(envoy_http_rq_total)
+        - name: Envoy rate of http requests
+          query: avg(rate(envoy_http_rq_total[%v]))
+# 3. start pod creation policy enforcement latency metrics
+- name: "starting network pod creation metrics"
+  measurements:
+  - Identifier: PodCreationLatencyMetrics
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: "Pod Creation Policy Enforcement Latency Metrics"
+      metricVersion: v1
+      unit: s
+      queries:
+        - name: PodCreationReachability - TargetCount
+          query: sum(pod_creation_reachability_latency_seconds_count)
+        - name: PodCreationReachability - Perc50
+          query: histogram_quantile(0.5, sum(rate(pod_creation_reachability_latency_seconds_bucket[%v])) by (le))
+        - name: PodCreationReachability - Perc90
+          query: histogram_quantile(0.9, sum(rate(pod_creation_reachability_latency_seconds_bucket[%v])) by (le))
+        - name: PodCreationReachability - Perc95
+          query: histogram_quantile(0.95, sum(rate(pod_creation_reachability_latency_seconds_bucket[%v])) by (le))
+        - name: PodCreationReachability - Perc99
+          query: histogram_quantile(0.99, sum(rate(pod_creation_reachability_latency_seconds_bucket[%v])) by (le))
+        - name: PodIpAssignedLatency - TargetCount
+          query: sum(pod_ip_address_assigned_latency_seconds_count)
+        - name: PodIpAssignedLatency - Perc50
+          query: histogram_quantile(0.50, sum(rate(pod_ip_address_assigned_latency_seconds_bucket[%v])) by (le))
+        - name: PodIpAssignedLatency - Perc90
+          query: histogram_quantile(0.90, sum(rate(pod_ip_address_assigned_latency_seconds_bucket[%v])) by (le))
+        - name: PodIpAssignedLatency - Perc95
+          query: histogram_quantile(0.95, sum(rate(pod_ip_address_assigned_latency_seconds_bucket[%v])) by (le))
+        - name: PodIpAssignedLatency - Perc99
+          query: histogram_quantile(0.99, sum(rate(pod_ip_address_assigned_latency_seconds_bucket[%v])) by (le))
+# 4. setup pod creation policy enforcement latency measurement
+- name: "Setup pod creation policy enforcement latency measurement"
+  measurements:
+  - Identifier: NetworkPolicyEnforcement
+    Method: NetworkPolicyEnforcement
+    Params:
+      action: setup
+      targetLabelKey: {{.CL2_NET_POLICY_ENFORCEMENT_LATENCY_TARGET_LABEL_KEY}}
+      targetLabelValue: {{.CL2_NET_POLICY_ENFORCEMENT_LATENCY_TARGET_LABEL_VALUE}}
+      testClientNodeSelectorKey: {{.CL2_NET_POLICY_ENFORCEMENT_LATENCY_NODE_LABEL_KEY}}
+      testClientNodeSelectorValue: {{.CL2_NET_POLICY_ENFORCEMENT_LATENCY_NODE_LABEL_VALUE}}
+      targetPort: 80
+      networkPolicyType: {{.CL2_NET_POLICY_TYPE}}
+      l7Enabled: {{.CL2_NET_POLICY_L7_ENABLED}}
+# 5. run pod creation policy enforcement latency measurement test-type
+- name: "Run pod creation network policy enforcement latency measurement"
+  measurements:
+  - Identifier: NetworkPolicyEnforcement
+    Method: NetworkPolicyEnforcement
+    Params:
+      action: run
+      testType: pod-creation
+      targetPort: 80
+      maxTargets: {{$NET_POLICY_ENFORCEMENT_LATENCY_MAX_TARGET_PODS_PER_NS}}
+      policyLoadCount: {{$NET_POLICY_ENFORCEMENT_LOAD_COUNT}}
+      policyLoadQPS: {{$NET_POLICY_ENFORCEMENT_LOAD_QPS}}
+      policyLoadTargetBaseName: {{$NET_POLICY_ENFORCEMENT_LOAD_TARGET_NAME}}
+      networkPolicyType: {{$NET_POLICY_TYPE}}
+      l7Enabled: {{$NET_POLICY_L7_ENABLED}}
+# 6. start target deployments for pod creation policy enforcement latency measurement
+- name: "Start target deployments"
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForControlledPodsRunning
+      Params:
+        apiVersion: apps/v1
+        kind: Deployment
+    Params:
+      action: start
+      checkIfPodsAreUpdated: true
+      labelSelector: group={{$TARGET_GROUP}}
+      operationTimeout: 20m
+      apiVersion: apps/v1
+- name: "Create target deployments"
+  phases:      
+  - namespaceRange:
+      min: 1
+      max: {{$TARGET_NAMESPACE_COUNT}}
+    replicasPerNamespace: 1
+    tuningSet: Uniform1qps
+    objectBundle:
+    - basename: target-deployment
+      objectTemplatePath: target_deployment.yaml
+      templateFillMap:
+        Replicas: {{$NUMBER_OF_SERVERS}}
+        TargetLabelKey: {{$NET_POLICY_ENFORCEMENT_LATENCY_TARGET_LABEL_KEY}}
+        TargetLabelValue: {{$NET_POLICY_ENFORCEMENT_LATENCY_TARGET_LABEL_VALUE}}
+        SvcName: small-service
+        Group: {{$TARGET_GROUP}}
+        deploymentLabel: start
+# 7. Wait for target deployments to be ready
+- name: "Wait for target deployments to be ready"
+  measurements:
+  - Identifier: WaitForControlledPodsRunning 
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+      refreshInterval: 15s
+# sleep for 10s - buffer for client pods to measure policy enforcement latency for new target deployments
+# and publish the metrics
+- name: "Sleep for 10s"
+  measurements:
+  - Identifier: Sleep
+    Method: Sleep
+    Params:
+      action: sleep
+      duration: 10s
+# 8. Gather cilium agent metrics for pod creation latency
+- name: "Gathering cilium metrics for pod creation latency"
+  measurements:
+  - Identifier: PodCreationLatencyMetricsCilium
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      enableViolations: true
+# 9. Gather cilium envoy metrics for pod creation latency
+- name: "Gathering cilium envoy metrics for pod creation latency"
+  measurements:
+  - Identifier: PodCreationLatencyMetricsCiliumEnvoy
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      enableViolations: true
+# 10. Gather network pod creation metrics
+- name: "Gathering pod creation policy enforcement latency metrics"
+  measurements:
+  - Identifier: PodCreationLatencyMetrics
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      enableViolations: true
+- name: "Complete pod creation network policy enforcement latency measurement"
+  measurements:
+  - Identifier: NetworkPolicyEnforcement
+    Method: NetworkPolicyEnforcement
+    Params:
+      action: complete
+      testType: pod-creation  
+
+
+    

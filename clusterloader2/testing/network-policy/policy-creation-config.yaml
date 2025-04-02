@@ -1,0 +1,244 @@
+{{$NETWORK_POLICY_ENFORCEMENT_LATENCY_BASELINE := DefaultParam .CL2_NETWORK_POLICY_ENFORCEMENT_LATENCY_BASELINE false}}
+{{$NET_POLICY_ENFORCEMENT_LATENCY_TARGET_LABEL_KEY := DefaultParam .CL2_NET_POLICY_ENFORCEMENT_LATENCY_TARGET_LABEL_KEY "net-pol-test"}}
+{{$NET_POLICY_ENFORCEMENT_LATENCY_TARGET_LABEL_VALUE := DefaultParam .CL2_NET_POLICY_ENFORCEMENT_LATENCY_TARGET_LABEL_VALUE "enforcement-latency"}}
+{{$NET_POLICY_ENFORCEMENT_LATENCY_NODE_LABEL_KEY := DefaultParam .CL2_NET_POLICY_ENFORCEMENT_LATENCY_NODE_LABEL_KEY "test"}}
+{{$NET_POLICY_ENFORCEMENT_LATENCY_NODE_LABEL_VALUE := DefaultParam .CL2_NET_POLICY_ENFORCEMENT_LATENCY_NODE_LABEL_VALUE "net-policy-client"}}
+{{$NET_POLICY_ENFORCEMENT_LATENCY_MAX_TARGET_PODS_PER_NS := DefaultParam .CL2_NET_POLICY_ENFORCEMENT_LATENCY_MAX_TARGET_PODS_PER_NS 5}}
+{{$NET_POLICY_ENFORCEMENT_LOAD_COUNT := DefaultParam .CL2_NET_POLICY_ENFORCEMENT_LOAD_COUNT 10}}
+{{$NET_POLICY_ENFORCEMENT_LOAD_QPS := DefaultParam .CL2_NET_POLICY_ENFORCEMENT_LOAD_QPS 10}}
+{{$NET_POLICY_ENFORCEMENT_LOAD_TARGET_NAME := DefaultParam .CL2_POLICY_ENFORCEMENT_LOAD_TARGET_NAME "small-deployment"}}
+{{$NET_POLICY_TYPE := DefaultParam .CL2_NET_POLICY_TYPE "k8s"}}
+{{$NET_POLICY_L7_ENABLED := DefaultParam .CL2_NET_POLICY_L7_ENABLED false}}
+{{$CILIUM_POLICY_IMPORTS_ERROR_THRESHOLD := DefaultParam .CL2_CILIUM_POLICY_IMPORTS_ERROR_THRESHOLD 0}}
+{{$CILIUM_ENDPOINT_REGEN_FAIL_PERC_THRESHOLD := DefaultParam .CL2_CILIUM_ENDPOINT_REGEN_FAIL_PERC_THRESHOLD 0.01}}
+{{$NUMBER_OF_SERVERS := DefaultParam .CL2_NUMBER_OF_SERVERS 5}}
+{{$TARGET_GROUP := DefaultParam .CL2_TARGET_GROUP "service-discovery"}}
+{{$TARGET_NAMESPACE_COUNT := DefaultParam .CL2_TARGET_NAMESPACE_COUNT 1}}
+
+name: network_policy_performance 
+namespace:
+  number: {{$TARGET_NAMESPACE_COUNT}}
+  prefix: slo
+  deleteStaleNamespaces: true
+  deleteAutomanagedNamespaces: true
+  enableExistingNamespaces: false
+tuningSets:
+- name: Uniform1qps
+  qpsLoad:
+    qps: 1
+steps:
+# start 
+# 1. cilium agent metrics for network policy enforcement latency
+# 2. cilium envoy metrics for network policy enforcement latency
+# 3. start policy enforcement latency metrics
+# 4. Setup policy enforcement latency measurement
+# 5. Start target deployments
+# 6. Create target deployments
+# 7. Wait for target deployments to be ready
+# 8. Run network policy enforcement latency measurement test-type 'policy-creation'
+# 9. Gather cilium agent metrics for network policy enforcement latency
+# 10. Gather cilium envoy metrics for network policy enforcement latency
+# 11. Gather policy enforcement latency metrics
+# 12. Complete policy enforcement latency measurement
+
+# 1. cilium agent metrics for network policy enforcement latency
+- name: "cilium agent metrics for network policy enforcement latency"
+  measurements:
+  - Identifier: PolicyEnforcementLatencyCiliumMetrics
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: "Cilium Agent Network Policy Enforcement Latency"
+      metricVersion: v1
+      unit: s
+      queries:
+        - name: Number of times a policy import has failed
+          query: sum(cilium_policy_import_errors_total)
+          threshold: {{$CILIUM_POLICY_IMPORTS_ERROR_THRESHOLD}}
+        - name: Failed endpoint regenerations percentage
+          query: sum(cilium_endpoint_regenerations_total{outcome="fail"}) / sum(cilium_endpoint_regenerations_total) * 100
+          threshold: {{$CILIUM_ENDPOINT_REGEN_FAIL_PERC_THRESHOLD}}
+        - name: Policy regeneration time - Perc50
+          query: histogram_quantile(0.50, sum(cilium_policy_regeneration_time_stats_seconds_bucket{scope="total"}) by (le))
+        - name: Policy regeneration time - Perc99
+          query: histogram_quantile(0.99, sum(cilium_policy_regeneration_time_stats_seconds_bucket{scope="total"}) by (le))
+        - name: Policy Implementation Delay into the datapath - Perc50
+          query: histogram_quantile(0.50, sum(cilium_policy_implementation_delay_bucket) by (le))
+        - name: Policy Implementation Delay into the datapath - Perc99
+          query: histogram_quantile(0.99, sum(cilium_policy_implementation_delay_bucket) by (le))
+        - name: Latency of policy update trigger - Perc50
+          query: histogram_quantile(0.50, sum(cilium_triggers_policy_update_call_duration_seconds_bucket{type="latency"}) by (le))
+        - name: Latency of policy update trigger - Perc99
+          query: histogram_quantile(0.99, sum(cilium_triggers_policy_update_call_duration_seconds_bucket{type="latency"}) by (le))
+        - name: Duration of policy update trigger - Perc50
+          query: histogram_quantile(0.50, sum(cilium_triggers_policy_update_call_duration_seconds_bucket{type="duration"}) by (le))
+        - name: Duration of policy update trigger - Perc99
+          query: histogram_quantile(0.99, sum(cilium_triggers_policy_update_call_duration_seconds_bucket{type="duration"}) by (le))
+        - name: Endpoint regeneration latency - Perc50
+          query: histogram_quantile(0.50, sum(cilium_endpoint_regeneration_time_stats_seconds_bucket{scope="total"}) by (le))
+        - name: Number of policies currently loaded
+          query: avg(cilium_policy)
+        - name: Number of endpoints labeled by policy enforcement status
+          query: sum(cilium_policy_endpoint_enforcement_status)
+# 2. cilium envoy metrics for network policy enforcement latency
+- name: "cilium envoy metrics for network policy enforcement latency"
+  measurements:
+  - Identifier: PolicyEnforcementLatencyCiliumEnvoyMetrics
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: "Cilium Envoy Network Policy Enforcement Latency"
+      metricVersion: v1
+      unit: s
+      queries:
+        - name: Envoy http requests - TargetCount
+          query: sum(envoy_http_rq_total)
+        - name: Envoy rate of http requests
+          query: avg(rate(envoy_http_rq_total[%v]))
+# 3. start policy enforcement latency metrics
+- name: "starting policy enforcement metrics, network policy type - {{.CL2_NET_POLICY_TYPE}}"
+  measurements:
+  - Identifier: PolicyEnforcementLatencyMetrics
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: "Network Policy Enforcement Latency"
+      metricVersion: v1
+      unit: s
+      queries:
+        - name: PolicyCreation - TargetCount
+          query: sum(policy_enforcement_latency_policy_creation_seconds_count)
+        - name: PolicyCreation - Perc50
+          query: histogram_quantile(0.5, sum(policy_enforcement_latency_policy_creation_seconds_bucket) by (le))
+        - name: PolicyCreation - Perc90
+          query: histogram_quantile(0.9, sum(policy_enforcement_latency_policy_creation_seconds_bucket) by (le))
+        - name: PolicyCreation - Perc95
+          query: histogram_quantile(0.95, sum(policy_enforcement_latency_policy_creation_seconds_bucket) by (le))
+        - name: PolicyCreation - Perc99
+          query: histogram_quantile(0.99, sum(policy_enforcement_latency_policy_creation_seconds_bucket) by (le))
+# resource usage measurement
+- name: "Resource Usage"
+  measurements:
+  - Identifier: ResourceUsageSummary
+    Method: ResourceUsageSummary
+    Params:
+      action: start
+# 4. Setup policy enforcement latency measurement
+- name: "Setup network policy enforcement latency measurement"
+  measurements:
+  - Identifier: NetworkPolicyEnforcement
+    Method: NetworkPolicyEnforcement
+    Params:
+      action: setup
+      targetLabelKey: {{.CL2_NET_POLICY_ENFORCEMENT_LATENCY_TARGET_LABEL_KEY}}
+      targetLabelValue: {{.CL2_NET_POLICY_ENFORCEMENT_LATENCY_TARGET_LABEL_VALUE}}
+      testClientNodeSelectorKey: {{.CL2_NET_POLICY_ENFORCEMENT_LATENCY_NODE_LABEL_KEY}}
+      testClientNodeSelectorValue: {{.CL2_NET_POLICY_ENFORCEMENT_LATENCY_NODE_LABEL_VALUE}}
+      networkPolicyType: {{$NET_POLICY_TYPE}}
+      l7Enabled: {{$NET_POLICY_L7_ENABLED}}
+      targetPort: 80
+      baseline: {{$NETWORK_POLICY_ENFORCEMENT_LATENCY_BASELINE}}
+# 5. Start target deployments
+- name: "Start target deployments"
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForControlledPodsRunning
+      Params:
+        apiVersion: apps/v1
+        kind: Deployment
+    Params:
+      action: start
+      checkIfPodsAreUpdated: true
+      labelSelector: group={{$TARGET_GROUP}}
+      operationTimeout: 20m
+      apiVersion: apps/v1
+- name: "Create target deployments"
+  phases:      
+  - namespaceRange:
+      min: 1
+      max: {{$TARGET_NAMESPACE_COUNT}}
+    replicasPerNamespace: 1
+    tuningSet: Uniform1qps
+    objectBundle:
+    - basename: target-deployment
+      objectTemplatePath: target_deployment.yaml
+      templateFillMap:
+        Replicas: {{$NUMBER_OF_SERVERS}}
+        TargetLabelKey: {{$NET_POLICY_ENFORCEMENT_LATENCY_TARGET_LABEL_KEY}}
+        TargetLabelValue: {{$NET_POLICY_ENFORCEMENT_LATENCY_TARGET_LABEL_VALUE}}
+        SvcName: small-service
+        Group: {{$TARGET_GROUP}}
+        deploymentLabel: start
+# 7. Wait for target deployments to be ready
+- name: "Wait for target deployments to be ready"
+  measurements:
+  - Identifier: WaitForControlledPodsRunning 
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+      refreshInterval: 15s
+# 8. Run network policy enforcement latency measurement test-type 'policy-creation'
+- name: "Run network policy enforcement latency measurement test-type 'policy-creation'"
+  measurements:
+  - Identifier: NetworkPolicyEnforcement
+    Method: NetworkPolicyEnforcement
+    Params:
+      action: run
+      testType: policy-creation
+      targetPort: 80
+      networkPolicyType: cilium
+      l7Enabled: true
+      maxTargets: {{$NET_POLICY_ENFORCEMENT_LATENCY_MAX_TARGET_PODS_PER_NS}}
+      policyLoadCount: {{$NET_POLICY_ENFORCEMENT_LOAD_COUNT}}
+      policyLoadQPS: {{$NET_POLICY_ENFORCEMENT_LOAD_QPS}}
+      policyLoadTargetBaseName: {{$NET_POLICY_ENFORCEMENT_LOAD_TARGET_NAME}}
+# 9. Gather cilium agent metrics for network policy enforcement latency
+- name: "Gather cilium agent metrics for network policy enforcement latency"
+  measurements:
+  - Identifier: PolicyEnforcementLatencyCiliumMetrics
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      enableViolations: true
+# 10. Gather cilium envoy metrics for network policy enforcement latency
+- name: "Gather cilium envoy metrics for network policy enforcement latency"
+  measurements:
+  - Identifier: PolicyEnforcementLatencyCiliumEnvoyMetrics
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      enableViolations: true
+# 11. Gather policy enforcement latency metrics
+- name: "Gather policy enforcement latency metrics"
+  measurements:
+  - Identifier: PolicyEnforcementLatencyMetrics
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      enableViolations: true
+# gather resource usage measurement
+- name: "Resource Usage Summary"
+  measurements:
+  - Identifier: ResourceUsageSummary
+    Method: ResourceUsageSummary
+    Params:
+      action: gather
+      enableViolations: true
+- name: Sleep
+  measurements:
+  - Identifier: sleep
+    Method: Sleep
+    Params:
+      duration: 60s
+# 12. Complete policy enforcement latency measurement
+- name: "Complete pod creation network policy enforcement latency measurement"
+  measurements:
+  - Identifier: NetworkPolicyEnforcement
+    Method: NetworkPolicyEnforcement
+    Params:
+      action: complete
+      testType: policy-creation
+
+
+    

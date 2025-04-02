@@ -1,0 +1,25 @@
+{{$PROMETHEUS_SCRAPE_CILIUM_ENVOY := DefaultParam .CL2_PROMETHEUS_SCRAPE_CILIUM_ENVOY false}}
+{{$PROMETHEUS_SCRAPE_CILIUM_ENVOY_PORT := DefaultParam .CL2_PROMETHEUS_SCRAPE_CILIUM_ENVOY_PORT "envoy-metrics"}}
+{{$PROMETHEUS_SCRAPE_CILIUM_ENVOY_INTERVAL := DefaultParam .CL2_PROMETHEUS_SCRAPE_CILIUM_ENVOY_INTERVAL "30s"}}
+
+{{if $PROMETHEUS_SCRAPE_CILIUM_ENVOY }}
+
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  labels:
+    k8s-app: cilium-envoy
+  name: cilium-envoy-pods
+  namespace: monitoring
+spec:
+  podMetricsEndpoints:
+    - interval: {{ $PROMETHEUS_SCRAPE_CILIUM_ENVOY_INTERVAL }}
+      port: {{ $PROMETHEUS_SCRAPE_CILIUM_ENVOY_PORT }}
+  jobLabel: k8s-app
+  selector:
+    matchLabels:
+      k8s-app: cilium-envoy
+  namespaceSelector:
+    matchNames:
+      - kube-system
+{{end}}

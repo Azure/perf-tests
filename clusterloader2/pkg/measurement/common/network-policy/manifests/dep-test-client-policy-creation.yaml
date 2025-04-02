@@ -34,7 +34,8 @@ spec:
           name: npdelaymetrics
           protocol: TCP
         imagePullPolicy: Always
-        image: gcr.io/k8s-staging-perf-tests/network-policy-enforcement-latency/policy-creation-enforcement-latency:v0.0.1
+        # image: gcr.io/k8s-staging-perf-tests/network-policy-enforcement-latency/policy-creation-enforcement-latency:v0.0.1
+        image: docker.io/sanamsarath/policy-creation-enforcement-latency:v0.0.1
         command:
         - sh
         - -c
@@ -46,6 +47,8 @@ spec:
           -MaxTargets={{.MaxTargets}}
           -MetricsPort={{.MetricsPort}}
           -AllowPolicyName={{.AllowPolicyName}}
+          -np_type={{.NetworkPolicy_Type}}
+          -np_namespace={{.Namespace}} # change this value according to the namespace where the policy is created, verify policy-egress-allow-target-pods.yaml
         resources:
           requests:
             cpu: 200m

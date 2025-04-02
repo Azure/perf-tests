@@ -27,6 +27,7 @@ import (
 	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	"k8s.io/perf-tests/clusterloader2/pkg/framework"
@@ -111,6 +112,12 @@ type networkPolicyEnforcementMeasurement struct {
 	// testClientNodeSelectorValue is value key for the node label on which the
 	// test client pods should run.
 	testClientNodeSelectorValue string
+	// np type is the type of network policy to be created, default is k8s.
+	npType string
+	// l7Enabled is a flag to enable L7 policies.
+	l7Enabled bool
+	// l7 port
+	l7Port int
 }
 
 // Execute - Available actions:
@@ -213,6 +220,21 @@ func (nps *networkPolicyEnforcementMeasurement) initializeMeasurement(config *me
 
 	if len(nps.targetNamespaces) == 0 {
 		return fmt.Errorf("cannot initialize the %q, no namespaces with prefix %q exist", networkPolicyEnforcementName, testNamespacePrefix)
+	}
+
+	// Get the network policy type
+	if nps.npType, err = util.GetStringOrDefault(config.Params, "networkPolicyType", "k8s"); err != nil {
+		return fmt.Errorf("failed to get network policy type, error: %v", err)
+	}
+
+	// Get the L7 enabled flag
+	if nps.l7Enabled, err = util.GetBoolOrDefault(config.Params, "l7Enabled", false); err != nil {
+		klog.Infof("Failed to get L7 enabled flag, error: %v", err)
+	}
+
+	// Get the L7 port
+	if nps.l7Port, err = util.GetIntOrDefault(config.Params, "l7Port", 80); err != nil {
+		klog.Infof("Failed to get L7 port, error: %v", err)
 	}
 
 	return nil
@@ -386,9 +408,10 @@ func (nps *networkPolicyEnforcementMeasurement) createPolicyAllowAPIServer() err
 
 func (nps *networkPolicyEnforcementMeasurement) createPolicyToTargetPods(policyName, targetNamespace, testType string, allowForTargetPods bool) error {
 	templateMap := map[string]interface{}{
-		"Name":           policyName,
-		"Namespace":      nps.testClientNamespace,
-		"TypeLabelValue": testType,
+		"Name":            policyName,
+		"Namespace":       nps.testClientNamespace,
+		"TypeLabelValue":  testType,
+		"ClientNamespace": nps.testClientNamespace,
 	}
 
 	if allowForTargetPods {
@@ -402,6 +425,14 @@ func (nps *networkPolicyEnforcementMeasurement) createPolicyToTargetPods(policyN
 		templateMap["TargetNamespace"] = targetNamespace
 	} else {
 		templateMap["OnlyTargetNamespace"] = false
+	}
+
+	templateMap["NetworkPolicy_Type"] = nps.npType
+
+	// if L7 enabled, then add the L7 parameters to templateMap
+	if nps.l7Enabled {
+		templateMap["L7Enabled"] = nps.l7Enabled
+		templateMap["TargetPort"] = nps.l7Port
 	}
 
 	if err := nps.framework.ApplyTemplatedManifests(manifestsFS, policyEgressTargetPodsFilePath, templateMap); err != nil {
@@ -420,6 +451,7 @@ func (nps *networkPolicyEnforcementMeasurement) createTestClientDeployments(temp
 		templateMap["Name"] = fmt.Sprintf("%s-%s-%d", testType, netPolicyTestClientName, i)
 		templateMap["TargetNamespace"] = ns
 		templateMap["AllowPolicyName"] = fmt.Sprintf("%s-%d", allowPolicyName, i)
+		templateMap["NetworkPolicy_Type"] = nps.npType
 
 		if err := nps.framework.ApplyTemplatedManifests(manifestsFS, deploymentFilePath, templateMap); err != nil {
 			return fmt.Errorf("error while creating test client deployment: %v", err)
@@ -528,13 +560,55 @@ func (nps *networkPolicyEnforcementMeasurement) deleteClusterRoleAndBinding() er
 	return nps.k8sClient.RbacV1().ClusterRoleBindings().Delete(context.TODO(), netPolicyTestClientName, metav1.DeleteOptions{})
 }
 
+func (nps *networkPolicyEnforcementMeasurement) deleteNetworkPolicies() error {
+	klog.V(2).Infof("Deleting Cilium network policies for measurement %q", networkPolicyEnforcementName)
+
+	dynamicClient := nps.framework.GetDynamicClients().GetClient()
+
+	switch nps.npType {
+	case "k8s":
+		return nil
+	case "ccnp":
+		// Define the GVR for CiliumClusterwideNetworkPolicy
+		ccnpGVR := schema.GroupVersionResource{
+			Group:    "cilium.io",
+			Version:  "v2",
+			Resource: "ciliumclusterwidenetworkpolicies",
+		}
+
+		if err := dynamicClient.Resource(ccnpGVR).DeleteCollection(context.TODO(), metav1.DeleteOptions{}, metav1.ListOptions{LabelSelector: fmt.Sprintf("type=%s", policyCreationTest)}); err != nil {
+			klog.Warningf("failed to delete CiliumClusterwideNetworkPolicy of type %s, error: %v", policyCreationTest, err)
+		}
+
+		if err := dynamicClient.Resource(ccnpGVR).DeleteCollection(context.TODO(), metav1.DeleteOptions{}, metav1.ListOptions{LabelSelector: fmt.Sprintf("type=%s", podCreationTest)}); err != nil {
+			klog.Warningf("failed to delete CiliumClusterwideNetworkPolicy of type %s, error: %v", podCreationTest, err)
+		}
+	case "cnp":
+		// Define the GVR for CiliumNetworkPolicy
+		cnpGVR := schema.GroupVersionResource{
+			Group:    "cilium.io",
+			Version:  "v2",
+			Resource: "ciliumnetworkpolicies",
+		}
+
+		if err := dynamicClient.Resource(cnpGVR).Namespace(nps.testClientNamespace).DeleteCollection(context.TODO(), metav1.DeleteOptions{}, metav1.ListOptions{}); err != nil {
+			klog.Warningf("failed to delete CiliumNetworkPolicy in ns:%s, error: %v", nps.testClientNamespace, err)
+		}
+	}
+	return nil
+}
+
 func (nps *networkPolicyEnforcementMeasurement) cleanUp() error {
 	if nps.k8sClient == nil {
 		return fmt.Errorf("cleanup skipped - the measurement is not running")
 	}
 
 	if err := nps.deleteClusterRoleAndBinding(); err != nil {
-		return err
+		klog.Warningf("Failed to delete ClusterRole and ClusterRoleBinding, error: %v", err)
+	}
+
+	if err := nps.deleteNetworkPolicies(); err != nil {
+		klog.Warningf("Failed to delete network policies, error: %v", err)
 	}
 
 	klog.V(2).Infof("Deleting namespace %q for measurement %q", nps.testClientNamespace, networkPolicyEnforcementName)
