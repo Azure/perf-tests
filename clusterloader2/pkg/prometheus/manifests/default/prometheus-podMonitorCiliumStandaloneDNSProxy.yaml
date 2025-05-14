@@ -1,0 +1,31 @@
+{{$PROMETHEUS_SCRAPE_CILIUM_AGENT_STANDALONE_DNS_PROXY_PORT := DefaultParam .CL2_PROMETHEUS_SCRAPE_CILIUM_AGENT_STANDALONE_DNS_PROXY_PORT 9961}}
+{{$PROMETHEUS_SCRAPE_CILIUM_AGENT_STANDALONE_DNS_PROXY_INTERVAL := DefaultParam .CL2_PROMETHEUS_SCRAPE_CILIUM_AGENT_STANDALONE_DNS_PROXY_INTERVAL "30s"}}
+{{$PROMETHEUS_SCRAPE_CILIUM_AGENT_STANDALONE_DNS_PROXY_METRIC_KEEP_LIST := DefaultParam .PROMETHEUS_SCRAPE_CILIUM_AGENT_STANDALONE_DNS_PROXY_METRIC_KEEP_LIST "(.*)"}}
+
+{{if or PROMETHEUS_SCRAPE_CILIUM_AGENT_STANDALONE_DNS_PROXY}}
+
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  labels:
+    k8s-app: acns-security-agent
+  name: cilium-standalone-dns-proxy
+  namespace: monitoring
+spec:
+  podMetricsEndpoints:
+{{if $PROMETHEUS_SCRAPE_CILIUM_AGENT_STANDALONE_DNS_PROXY }}
+    - interval: {{ $PROMETHEUS_SCRAPE_CILIUM_AGENT_STANDALONE_DNS_PROXY_INTERVAL }}
+      port: {{ $PROMETHEUS_SCRAPE_CILIUM_AGENT_STANDALONE_DNS_PROXY_PORT }}
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          regex: {{ $PROMETHEUS_SCRAPE_CILIUM_AGENT_STANDALONE_DNS_PROXY_METRIC_KEEP_LIST }}
+          action: keep
+{{end}}
+  jobLabel: k8s-app
+  selector:
+    matchLabels:
+      k8s-app: acns-security-agent
+  namespaceSelector:
+    matchNames:
+      - kube-system
+{{end}}
