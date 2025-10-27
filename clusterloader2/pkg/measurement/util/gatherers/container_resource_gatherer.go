@@ -81,7 +81,7 @@ func isDaemonPod(pod *corev1.Pod) bool {
 }
 
 // NewResourceUsageGatherer creates new instance of ContainerResourceGatherer
-func NewResourceUsageGatherer(c clientset.Interface, host string, port int, provider provider.Provider, options ResourceGathererOptions, namespace string) (*ContainerResourceGatherer, error) {
+func NewResourceUsageGatherer(c clientset.Interface, host string, port int, provider provider.Provider, options ResourceGathererOptions, namespace string, podLabelSelector ...string) (*ContainerResourceGatherer, error) {
 	g := ContainerResourceGatherer{
 		client:       c,
 		isRunning:    true,
@@ -103,12 +103,31 @@ func NewResourceUsageGatherer(c clientset.Interface, host string, port int, prov
 			provider:                    provider,
 		})
 	} else {
-		listOptions := metav1.ListOptions{ResourceVersion: "0"}
-		pods, err := c.CoreV1().Pods(namespace).List(context.TODO(), listOptions)
-		if err != nil {
-			return nil, fmt.Errorf("listing pods error: %v", err)
+		var pods []corev1.Pod
+		podListOptions := metav1.ListOptions{
+			ResourceVersion: "0",
+		}
+		if len(podLabelSelector) > 0 {
+			for _, label := range podLabelSelector {
+				podListOptions = metav1.ListOptions{
+					LabelSelector:   label,
+					ResourceVersion: "0",
+				}
+				podList, err := c.CoreV1().Pods(namespace).List(context.Background(), podListOptions)
+				if err != nil {
+					return nil, fmt.Errorf("listing pods error: %v", err)
+				}
+				pods = append(pods, podList.Items...)
+			}
+		} else {
+			podList, err := c.CoreV1().Pods(namespace).List(context.Background(), podListOptions)
+			if err != nil {
+				return nil, fmt.Errorf("listing pods error: %v", err)
+			}
+			pods = podList.Items
 		}
 
+		listOptions := metav1.ListOptions{ResourceVersion: "0"}
 		nodeList, err := c.CoreV1().Nodes().List(context.TODO(), listOptions)
 		if err != nil {
 			return nil, fmt.Errorf("listing nodes error: %v", err)
@@ -122,7 +141,7 @@ func NewResourceUsageGatherer(c clientset.Interface, host string, port int, prov
 		}
 
 		nodesToConsider := make(map[string]bool)
-		for _, pod := range pods.Items {
+		for _, pod := range pods {
 			if (options.Nodes == MasterAndNonDaemons) && !masterNodes.Has(pod.Spec.NodeName) && isDaemonPod(&pod) {
 				continue
 			}
