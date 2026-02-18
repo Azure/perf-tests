@@ -19,6 +19,10 @@ spec:
     bearerTokenSecret:
       name: prometheus-token
       key: token
+    relabelings:
+      - sourceLabels: [ __meta_kubernetes_endpoint_node_name ]
+        regex: 'kwok-.*'
+        action: drop
   - port: https-metrics
     scheme: https
     path: /metrics/cadvisor
@@ -29,6 +33,10 @@ spec:
     bearerTokenSecret:
       name: prometheus-token
       key: token
+    relabelings:
+      - sourceLabels: [ __meta_kubernetes_endpoint_node_name ]
+        regex: 'kwok-.*'
+        action: drop
     metricRelabelings:
       - sourceLabels: [ namespace ]
         regex: 'test-.*'
