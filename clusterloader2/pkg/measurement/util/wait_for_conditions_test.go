@@ -55,6 +55,7 @@ func TestWaitForGenericK8sObjects(t *testing.T) {
 				FailedConditions:      []string{},
 				MinDesiredObjectCount: 1,
 				MaxFailedObjectCount:  0,
+				MaxDesiredObjectCount: -1,
 				CallerName:            "test",
 				WaitInterval:          100 * time.Millisecond,
 			},
@@ -85,6 +86,7 @@ func TestWaitForGenericK8sObjects(t *testing.T) {
 				FailedConditions:      []string{"Failed=True"},
 				MinDesiredObjectCount: 1,
 				MaxFailedObjectCount:  0,
+				MaxDesiredObjectCount: -1,
 				CallerName:            "test",
 				WaitInterval:          100 * time.Millisecond,
 			},
@@ -120,6 +122,7 @@ func TestWaitForGenericK8sObjects(t *testing.T) {
 				FailedConditions:      []string{"Failed=True"},
 				MinDesiredObjectCount: 3,
 				MaxFailedObjectCount:  1,
+				MaxDesiredObjectCount: -1,
 				CallerName:            "test",
 				WaitInterval:          100 * time.Millisecond,
 			},
@@ -166,6 +169,7 @@ func TestWaitForGenericK8sObjects(t *testing.T) {
 				FailedConditions:      []string{"Failed=True"},
 				MinDesiredObjectCount: 3,
 				MaxFailedObjectCount:  1,
+				MaxDesiredObjectCount: -1,
 				CallerName:            "test",
 				WaitInterval:          100 * time.Millisecond,
 			},
@@ -198,6 +202,113 @@ func TestWaitForGenericK8sObjects(t *testing.T) {
 			defer cancel()
 			dynamicClient := fake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
 				tt.options.GroupVersionResource: "ConditionsList",
+			})
+			for _, o := range tt.existingObjects {
+				c := dynamicClient.Resource(tt.options.GroupVersionResource).Namespace(o.Namespace)
+				if _, err := c.Create(ctx, o.Unstructured, metav1.CreateOptions{}); err != nil {
+					t.Fatalf("Failed to create an existing object %v, got error: %v", o, err)
+				}
+			}
+
+			if err := WaitForGenericK8sObjects(ctx, dynamicClient, tt.options); (err != nil) != tt.wantErr {
+				t.Errorf("WaitForGenericK8sObjects() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestWaitForGenericK8sObjectsDeletion(t *testing.T) {
+	gvr := schema.GroupVersionResource{
+		Group:    "ray.io",
+		Version:  "v1",
+		Resource: "rayclusters",
+	}
+
+	tests := []struct {
+		name            string
+		timeout         time.Duration
+		options         *WaitForGenericK8sObjectsOptions
+		existingObjects []exampleObject
+		wantErr         bool
+	}{
+		{
+			name:    "no objects remaining, deletion complete",
+			timeout: 2 * time.Second,
+			options: &WaitForGenericK8sObjectsOptions{
+				GroupVersionResource:  gvr,
+				Namespaces:            NamespacesRange{Prefix: "namespace", Min: 1, Max: 1},
+				MaxDesiredObjectCount: 0,
+				CallerName:            "test",
+				WaitInterval:          100 * time.Millisecond,
+			},
+			existingObjects: []exampleObject{},
+			wantErr:         false,
+		},
+		{
+			name:    "objects still present, exceeds max desired",
+			timeout: 1 * time.Second,
+			options: &WaitForGenericK8sObjectsOptions{
+				GroupVersionResource:  gvr,
+				Namespaces:            NamespacesRange{Prefix: "namespace", Min: 1, Max: 1},
+				MaxDesiredObjectCount: 0,
+				CallerName:            "test",
+				WaitInterval:          100 * time.Millisecond,
+			},
+			existingObjects: []exampleObject{
+				newExampleObject("raycluster-1", "namespace-1", []interface{}{}),
+				newExampleObject("raycluster-2", "namespace-1", []interface{}{}),
+			},
+			wantErr: true,
+		},
+		{
+			name:    "object count at max desired threshold",
+			timeout: 2 * time.Second,
+			options: &WaitForGenericK8sObjectsOptions{
+				GroupVersionResource:  gvr,
+				Namespaces:            NamespacesRange{Prefix: "namespace", Min: 1, Max: 1},
+				MaxDesiredObjectCount: 2,
+				CallerName:            "test",
+				WaitInterval:          100 * time.Millisecond,
+			},
+			existingObjects: []exampleObject{
+				newExampleObject("raycluster-1", "namespace-1", []interface{}{}),
+				newExampleObject("raycluster-2", "namespace-1", []interface{}{}),
+			},
+			wantErr: false,
+		},
+		{
+			name:    "negative maxDesiredObjectCount uses condition mode, not deletion",
+			timeout: 1 * time.Second,
+			options: &WaitForGenericK8sObjectsOptions{
+				GroupVersionResource:  gvr,
+				Namespaces:            NamespacesRange{Prefix: "namespace", Min: 1, Max: 1},
+				SuccessfulConditions:  []string{"Ready=True"},
+				FailedConditions:      []string{},
+				MinDesiredObjectCount: 1,
+				MaxFailedObjectCount:  0,
+				MaxDesiredObjectCount: -1,
+				CallerName:            "test",
+				WaitInterval:          100 * time.Millisecond,
+			},
+			existingObjects: []exampleObject{
+				newExampleObject("raycluster-1", "namespace-1", []interface{}{
+					map[string]interface{}{
+						"type":   "Ready",
+						"status": "True",
+					},
+				}),
+			},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithTimeout(context.Background(), tt.timeout)
+			defer cancel()
+			dynamicClient := fake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+				tt.options.GroupVersionResource: "RayClusterList",
 			})
 			for _, o := range tt.existingObjects {
 				c := dynamicClient.Resource(tt.options.GroupVersionResource).Namespace(o.Namespace)

@@ -45,6 +45,10 @@ type WaitForGenericK8sObjectsOptions struct {
 	MinDesiredObjectCount int
 	// MaxFailedObjectCount describes maximum number of objects that could contain failed condition.
 	MaxFailedObjectCount int
+	// MaxDesiredObjectCount, if non-negative, switches to deletion mode:
+	// the measurement waits until the total object count drops to this value
+	// or below. When set, condition-based fields are ignored.
+	MaxDesiredObjectCount int
 	// CallerName identifies the measurement making the calls.
 	CallerName string
 	// WaitInterval contains interval for which the function waits between refreshes.
@@ -80,12 +84,45 @@ func (nr *NamespacesRange) getMap() map[string]bool {
 // WaitForGenericK8sObjects waits till the desired number of k8s objects
 // fulfills given conditions requirements, ctx.Done() channel is used to
 // wait for timeout.
+// When MaxDesiredObjectCount is non-negative, the function switches to
+// deletion mode and waits until the total object count drops to that value
+// or below.
 func WaitForGenericK8sObjects(ctx context.Context, dynamicClient dynamic.Interface, options *WaitForGenericK8sObjectsOptions) error {
 	store, err := NewDynamicObjectStore(ctx, dynamicClient, options.GroupVersionResource, options.Namespaces.getMap())
 	if err != nil {
 		return err
 	}
 
+	if options.MaxDesiredObjectCount >= 0 {
+		return waitForObjectDeletion(ctx, store, options)
+	}
+	return waitForObjectConditions(ctx, store, options)
+}
+
+// waitForObjectDeletion waits until the total number of objects drops to
+// MaxDesiredObjectCount or below.
+func waitForObjectDeletion(ctx context.Context, store *DynamicObjectStore, options *WaitForGenericK8sObjectsOptions) error {
+	for {
+		objects, err := store.ListObjectSimplifications()
+		if err != nil {
+			return err
+		}
+		count := len(objects)
+		klog.V(2).Infof("%s: waiting for object count to drop to %d, current count=%d", options.Summary(), options.MaxDesiredObjectCount, count)
+		if count <= options.MaxDesiredObjectCount {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s: timeout while waiting for object count to drop to %d, current count=%d",
+				options.Summary(), options.MaxDesiredObjectCount, count)
+		case <-time.After(options.WaitInterval):
+		}
+	}
+}
+
+// waitForObjectConditions waits until enough objects match the given conditions.
+func waitForObjectConditions(ctx context.Context, store *DynamicObjectStore, options *WaitForGenericK8sObjectsOptions) error {
 	objects, err := store.ListObjectSimplifications()
 	if err != nil {
 		return err

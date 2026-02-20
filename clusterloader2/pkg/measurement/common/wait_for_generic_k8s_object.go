@@ -83,6 +83,12 @@ func (w *waitForGenericK8sObjectsMeasurement) Execute(config *measurement.Config
 	if err != nil {
 		return nil, err
 	}
+	// maxDesiredObjectCount enables deletion mode when >= 0.
+	// Default is -1 (disabled), preserving the original condition-based behavior.
+	maxDesiredObjectCount, err := util.GetIntOrDefault(config.Params, "maxDesiredObjectCount", -1)
+	if err != nil {
+		return nil, err
+	}
 
 	dynamicClient := config.ClusterFramework.GetDynamicClients().GetClient()
 	ctx, cancel := context.WithTimeout(context.TODO(), timeout)
@@ -95,6 +101,7 @@ func (w *waitForGenericK8sObjectsMeasurement) Execute(config *measurement.Config
 		FailedConditions:      failedConditions,
 		MinDesiredObjectCount: minDesiredObjectCount,
 		MaxFailedObjectCount:  maxFailedObjectCount,
+		MaxDesiredObjectCount: maxDesiredObjectCount,
 		CallerName:            w.String(),
 		WaitInterval:          refreshInterval,
 	}
